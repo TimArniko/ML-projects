@@ -48,8 +48,8 @@ Included steps:
 ## 📂 3. Unsupervised Learning
 
 ### 🤖 Unsupervised Representation Learning for Depth Data  
-**Notebook:** `Unsupervised Learning/Autoencoder_PCA.ipynb`  
-**Dataset:** `Unsupervised Learning/Messreihe_demo1.csv`
+**Notebook:** `Autoencoder_PCA.ipynb`  
+**Dataset:** `Messreihe_demo1.csv`
 
 **Summary:**  
 This project explores unsupervised representation learning on depth profiles captured by a sensor system.  
