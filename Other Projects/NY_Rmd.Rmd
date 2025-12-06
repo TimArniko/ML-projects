@@ -1,0 +1,273 @@
+---
+title: "NYDP Shooting Incident Data"
+author: "T. A. Meinhold"
+date: "2025-12-06"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Data Report
+
+## Introduction
+
+Understanding temporal patterns in criminal activity is essential for interpreting underlying social dynamics and for improving crime-prevention strategies. Crime data often reveal recurring structures across hours, days, and seasons, reflecting human behavior, environmental conditions, and situational opportunities. In this analysis, we examine how crime incidents vary over the course of the week, across different times of day, and throughout the year. By identifying clear peaks, troughs, and periodic structures, we can better understand when crime is most likely to occur and explore plausible explanations for these fluctuations.
+
+## Loading the Data
+
+The source data file of the NYDP Shooting Incident Data: <https://catalog.data.gov/dataset/nypd-shooting-incident-data-historic>. We now import libraries and load the csv-file:
+
+
+
+```{r urls, echo=TRUE}
+library(tidyverse)
+library(lubridate)
+library(ggplot2)
+library(dplyr)
+
+url_in <- "https://data.cityofnewyork.us/api/views/833y-fsy8/"
+
+file_names <- c("rows.csv")
+
+urls <- str_c(url_in, file_names)
+
+NY_Cases <- read_csv(urls[1])
+```
+
+## Cleaning the Data
+
+I delete columns not needed here and convert the date in the correct format:
+
+```{r cleaning}
+NY_Cases <- NY_Cases %>% 
+  select(
+    -JURISDICTION_CODE,
+    -X_COORD_CD,
+    -Y_COORD_CD,
+    -Latitude,
+    -Longitude,
+    -Lon_Lat,
+    -LOC_CLASSFCTN_DESC,
+    -LOCATION_DESC,
+    -LOC_OF_OCCUR_DESC
+  )
+
+NY_Cases <- NY_Cases %>% 
+  mutate(OCCUR_DATE = mdy(OCCUR_DATE))
+```
+
+Now, I look into the data if there are any columns have many `nan` and I factorize the data in order to make everything later more suitable. I also split the date into hour, day, month and year:
+
+```{r factorized}
+NY_Cases %>%
+  summarise(across(everything(), ~ sum(is.na(.))))
+
+NY_Cases <- NY_Cases %>%
+  mutate(
+    BORO           = factor(BORO),
+    PERP_SEX       = factor(PERP_SEX),
+    PERP_RACE      = factor(PERP_RACE),
+    VIC_SEX        = factor(VIC_SEX),
+    VIC_RACE       = factor(VIC_RACE),
+    PERP_AGE_GROUP = factor(PERP_AGE_GROUP),
+    VIC_AGE_GROUP  = factor(VIC_AGE_GROUP)
+  )
+
+NY_Cases <- NY_Cases %>%
+  mutate(
+    year     = year(OCCUR_DATE),
+    month    = month(OCCUR_DATE, label = TRUE, abbr = TRUE),
+    weekday  = wday(OCCUR_DATE, label = TRUE, abbr = TRUE),
+    hour     = lubridate::hour(OCCUR_TIME)
+  )
+```
+
+Now let's make a heatmap:
+
+```{r heatmap, echo=TRUE}
+NY_Cases %>% 
+  mutate(
+    hour = hour(OCCUR_TIME),
+    weekday = wday(OCCUR_DATE, label = TRUE)
+  ) %>%
+  count(weekday, hour) %>%
+  ggplot(aes(hour, weekday, fill = n)) +
+  geom_tile() +
+  scale_fill_viridis_c() +
+  labs(title = "Frequency of cases by hour and weekday")
+```
+
+General observations: We can see that on weekends there are significantly more crime cases, especially during the night. This can be explained by the fact that people have more free time on weekends and/or expect fewer witnesses at night.
+
+Detailed observations: Throughout the entire week, the number of crime incidents in the evening and at night is fairly similar. This is probably the time when more “*crime professionals*” are active. However, during the weekend, more crimes occur in the early morning hours. This could be explained by the fact that far more people are out and have more time. At night, observations are generally more difficult, and fewer people are awake, which makes unobserved interactions and criminal activity more likely.
+
+## Correlation Analysis
+
+We now look into how overall crime frequency relates to crime severity across the day, using a combined visualization of hourly case counts and murder rates.
+
+```{r combined-plot}
+NY_cases_corr <- NY_Cases %>%
+  mutate(hour = hour(OCCUR_TIME)) %>%
+  group_by(hour) %>%
+  summarise(n_cases = n(), murder_rate = mean(STATISTICAL_MURDER_FLAG))
+
+max_cases <- max(NY_cases_corr$n_cases)
+min_rate  <- min(NY_cases_corr$murder_rate)
+max_rate  <- max(NY_cases_corr$murder_rate)
+
+scale_factor <- max_cases / (max_rate - min_rate)
+
+ggplot(NY_cases_corr, aes(hour, murder_rate)) +
+  geom_col(aes(y = n_cases), fill = "grey70", alpha = 0.7) +
+  geom_line(aes(y = (murder_rate - min_rate) * scale_factor), 
+            color = "red", size = 1.2) +
+  scale_y_continuous(
+    name = "Number of Cases",
+    sec.axis = sec_axis(transform = ~ . / scale_factor + min_rate,
+                        name = "Murder Rate")
+  ) +
+  labs(
+    title = "Combined Plot: Number of Cases and Murder Rate per Hour",
+    x = "Hour of Day"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.title.y = element_text(color = "black", size = 12),
+    axis.title.y.right = element_text(color = "red", size = 12),
+    axis.text.y.right  = element_text(color = "red")
+  )
+```
+
+The plot shows two patterns that together reveal how crime severity and crime frequency differ across the day:
+
+1.  Total number of cases (grey bars): Crime frequency is strongly concentrated during late-night and early-morning hours. The highest number of incidents occurs between 22:00 and 02:00, particularly around midnight, which aligns with typical nightlife activity. The number of cases then drops sharply during the early morning (around 5–7 a.m.) and gradually increases again throughout the afternoon and evening.
+
+2.  Murder rate (red line): The murder rate does not follow the same pattern as the general crime frequency. Instead, the rate peaks sharply during the early morning hours (around 6–7 a.m.), even though total crime is relatively low at that time. This suggests that incidents occurring in these low-activity hours tend to be more severe or more targeted. In contrast, the murder rate is somewhat lower during the late-night peak (0–2 a.m.), when many incidents occur but a larger share are non-lethal.
+
+3.  Combined interpretation:
+
+-   High-volume hours (evening and night):
+    -   many incidents, but
+    -   lower proportion are murders.
+-   Low-volume hours (early morning):
+    -   fewer incidents, but
+    -   a relatively high proportion are fatal.
+-   Evening to late night (17:00–02:00):
+    -   moderate murder rate with
+    -   steadily rising incident numbers.
+
+This pattern could indicate that crime during high-activity periods is driven more by opportunity and social interaction, while early-morning crimes may be more intentional or involve different offender–victim dynamics.
+
+## Model
+
+We will now make a model in order to understand the dynamics better:
+
+```{r logit}
+model_f <- glm(
+  STATISTICAL_MURDER_FLAG ~ factor(hour) + weekday + BORO + PRECINCT,
+  family = binomial,
+  data = NY_Cases
+)
+summary(model_f)
+
+```
+
+```{r}
+newdata <- data.frame(
+  hour = factor(0:23, levels = levels(NY_Cases$hour)),
+  weekday = factor("Mo", levels = levels(NY_Cases$weekday)),
+  BORO = factor("BRONX", levels = levels(NY_Cases$BORO)),
+  PRECINCT = 40
+)
+
+predict_hourly <- predict(model_f, newdata, type = "response")
+
+ref_weekday <- levels(NY_Cases$weekday)[1]
+ref_boro    <- levels(NY_Cases$BORO)[1]
+ref_precinct <- median(NY_Cases$PRECINCT)
+
+newdata <- data.frame(
+  hour    = 0:23,
+  weekday = factor(ref_weekday, levels = levels(NY_Cases$weekday)),
+  BORO    = factor(ref_boro,    levels = levels(NY_Cases$BORO)),
+  PRECINCT = ref_precinct
+)
+
+pred <- predict(model_f, newdata, type = "link", se.fit = TRUE)
+
+newdata$fit   <- pred$fit
+newdata$se    <- pred$se.fit
+newdata$prob  <- plogis(newdata$fit)
+newdata$lower <- plogis(newdata$fit - 1.96 * newdata$se)
+newdata$upper <- plogis(newdata$fit + 1.96 * newdata$se)
+
+summary(newdata$prob)
+
+ggplot(newdata, aes(x = hour, y = prob)) +
+  geom_line() +
+  geom_ribbon(aes(ymin = lower, ymax = upper), alpha = 0.2) +
+  scale_x_continuous(breaks = 0:23) +
+  labs(
+    title = "Predicted Murder Rate by Hour of Day",
+    x = "Hour of Day",
+    y = "Predicted Murder Rate"
+  ) +
+  theme_minimal()
+```
+
+To analyze how the likelihood of a murder varies across the day, we fitted a logistic regression model using the binary variable *STATISTICAL_MURDER_FLAG* as the outcome.
+
+To properly capture these non-linear patterns, we replaced the numeric “hour” variable with a categorical factor, allowing the model to estimate a separate murder probability for each hour of the day without forcing a linear trend. This dramatically improved model fit (lower AIC) and revealed several hours with significantly higher or lower murder rates compared to midnight (the reference category).
+
+We then created a new data frame representing each hour of the day and generated predicted murder probabilities using the fitted factor-based model. These predictions were visualized in a line plot with 95% confidence intervals, showing how the estimated murder rate changes throughout the day according to the model.
+
+This approach provides a statistically grounded way to confirm and quantify the temporal patterns already visible in the raw data and exploratory plots.
+
+## Outlook: Seasonal Analysis
+
+We now look into a time series and plot the crime cases per month:
+
+```{r plot-month, echo=FALSE}
+NY_monthly <- NY_Cases %>%
+  count(month = floor_date(OCCUR_DATE, "month"))
+
+ggplot(NY_monthly, aes(month, n)) +
+  geom_line() +
+  labs(title = "Trend cases per month", y = "Number")
+```
+
+Here we can see a periodic structure: one peak generally corresponds to one year. All peaks reach their highest values in summer, while the lowest points appear at the end or the beginning of a year. But why do we observe more crime in summer than in winter?
+
+One possible explanation could be that nights in summer are less dark than in winter, allowing law enforcement to see better. However, this does not make much sense, as modern technology should be sufficient to detect and catch criminals regardless of season.
+
+## Conclusion
+
+Our analysis reveals that crime is shaped by both short-term (hourly) and long-term (seasonal) temporal patterns. On the daily level, total crime incidents peak during late-night hours, yet the fitted logistic model shows that the highest predicted murder probabilities occur in the early morning hours (around 5–7 a.m.), when overall crime frequency is relatively low. This suggests that incidents in these hours tend to be more severe or more targeted, while late-night peaks are driven more by high volumes of less lethal offenses.
+
+On a broader time scale, the data exhibit a clear seasonal cycle, with one major peak per year: crime counts are highest during the summer months and reach their minimum at the turn of the year. This seasonal pattern is consistent with increased outdoor and social activity, higher mobility, and more interaction in warmer periods, which create additional opportunities for crime, whereas winter conditions and year-end periods may suppress such activity.
+
+By combining non-linear modeling of the hourly effect (via a factor-based logistic regression) with aggregated seasonal analysis, we obtain a more nuanced picture: crime severity and crime frequency do not move in lockstep. High-frequency periods are not always the most lethal, and long-term seasonal peaks are driven primarily by exposure and opportunity rather than by changes in law-enforcement capacity alone.
+
+As before, these findings must be interpreted in light of potential **biases**: underreporting, changes in policing strategies, temporal variation in patrol patterns, and unobserved social or environmental factors may all influence the observed trends. These findings may be influenced also by analytical biases. Modeling choices—such as treating “hour” as a factor, aggregating data by month, or ignoring temporal dependence—may shape the results and potentially over- or understate certain patterns. Nevertheless, the combined hourly and seasonal analysis provides a useful framework for identifying when crime, especially lethal crime, is most likely to occur.
+
+Here all Interpretations in our Table:
+
+| Time Scale | Observed Pattern | Evidence | Interpretation |
+|------------------|------------------|------------------|--------------------|
+| **Hourly (all crimes)** | Peak at 22:00–02:00 | Descriptive plots | Nightlife-driven exposure. |
+| **Hourly (murder probability)** | Peak at 05:00–07:00 | Logistic model (factor hour) | Early-morning incidents more severe. |
+| **Afternoon hours** | Moderate murder risk | Model coefficients (10–14) | Serious incidents despite lower volume. |
+| **Evening hours** | High volume, moderate severity | Model (17–18) | Many incidents, but less lethal. |
+| **Weekday effects** | Small differences | Weak significance | Hour \> weekday. |
+| **Borough effects** | No major differences | BORO not significant | Geography less relevant. |
+| **Seasonal (all crimes)** | Summer peaks, winter lows | Monthly aggregation | More activity/exposure in summer. |
+
+: Summary table
+
+```{r}
+sessionInfo()
+```
